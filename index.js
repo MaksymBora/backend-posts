@@ -1,10 +1,15 @@
 import express from "express";
-import jwt from "jsonwebtoken";
-import bcrypt from "bcrypt";
 import mongoose from "mongoose";
-import { validationResult } from "express-validator";
-import { registerValidation } from "./validations/auth.js";
-import UserModel from "./models/User.js";
+import multer from "multer";
+import {
+  registerValidation,
+  loginValidation,
+  postCreateValidation,
+} from "./validations.js";
+import checkAuth from "./utils/checkAuth.js";
+import * as UserController from "./controllers/UserController.js";
+import * as PostController from "./controllers/PostController.js";
+import handleValidationErrors from "./utils/handleValidationErrors.js";
 
 mongoose
   .connect(
@@ -15,97 +20,63 @@ mongoose
 
 const app = express();
 
+const storage = multer.diskStorage({
+  destination: (_, __, cb) => {
+    cb(null, "uploads");
+  },
+  filename: (_, file, cb) => {
+    cb(null, file.originalname);
+  },
+});
+
+const upload = multer({ storage });
+
 app.use(express.json());
+app.use("/uploads", express.static("uploads"));
 
-app.post("/auth/login", async (req, res) => {
-  try {
-    const user = await UserModel.findOne({ email: req.body.email });
+// Login user
+app.post(
+  "/auth/login",
+  loginValidation,
+  handleValidationErrors,
+  UserController.login
+);
 
-    if (!user) {
-      return res.status(404).json({
-        message: "Login or password is not correct",
-      });
-    }
+// Register user
+app.post(
+  "/auth/register",
+  checkAuth,
+  registerValidation,
+  handleValidationErrors,
+  UserController.register
+);
 
-    const isValidPass = await bcrypt.compare(
-      req.body.password,
-      user._doc.passwordHash
-    );
+// Current user
+app.get("/auth/me", checkAuth, UserController.getCurrentUser);
 
-    if (!isValidPass) {
-      return res.status(404).json({
-        message: "Login or password is not correct",
-      });
-    }
-
-    const token = jwt.sign(
-      {
-        _id: user._id,
-      },
-      "secret123",
-      {
-        expiresIn: "30d",
-      }
-    );
-
-    const { passwordHash, ...userData } = user._doc;
-
-    res.json({
-      ...userData,
-      token,
-    });
-  } catch (error) {
-    console.log(error);
-    res.status(500).json({ message: "User is not authorized" });
-  }
+app.post("/upload", upload.single("image"), (req, res) => {
+  res.json({
+    url: `/uploads/${req.file.originalname}`,
+  });
 });
-
-app.post("/auth/register", registerValidation, async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json(errors.array());
-    }
-
-    const password = req.body.password;
-    const salt = await bcrypt.genSalt(10);
-    const hash = await bcrypt.hash(password, salt);
-
-    const doc = new UserModel({
-      email: req.body.email,
-      fullName: req.body.fullName,
-      avatarUrl: req.body.avatarUrl,
-      passwordHash: hash,
-    });
-
-    const user = await doc.save();
-
-    const token = jwt.sign(
-      {
-        _id: user._id,
-      },
-      "secret123",
-      {
-        expiresIn: "30d",
-      }
-    );
-
-    const { passwordHash, ...userData } = user._doc;
-
-    res.json({
-      ...userData,
-      token,
-    });
-  } catch (error) {
-    console.log(error);
-    res.status(500).json({ message: "Registration failed" });
-  }
-});
-
-app.get("/auth/me", async (req, res) => {
-  try {
-  } catch (error) {}
-});
+// Posts
+app.get("/posts", PostController.getAll);
+app.get("/posts/:id", PostController.getOne);
+app.post(
+  "/posts",
+  checkAuth,
+  postCreateValidation,
+  handleValidationErrors,
+  PostController.create
+);
+app.delete("/posts/:id", checkAuth, PostController.removePost);
+app.patch(
+  "/posts/:id",
+  checkAuth,
+  postCreateValidation,
+  handleValidationErrors,
+  PostController.update
+);
 
 app.listen(4444, (err) => {
   if (err) {
